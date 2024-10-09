@@ -1,52 +1,94 @@
 const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
 const bodyParser = require('body-parser');
-const cors = require('cors');
-const db = require('./database');
 
 const app = express();
-const PORT = 3000;
-
-app.use(cors());
 app.use(bodyParser.json());
 
-// Rota para iniciar um cronômetro (armazenar tempo)
-app.post('/timers', (req, res) => {
-  const { time } = req.body; // Tempo em segundos
-  const startTime = new Date().toISOString(); // Armazena o tempo atual como início
-  const status = 'active'; // Define um status padrão
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-  // Adiciona um log para verificação
+let startTime, elapsedTime = 0, interval, isRunning = false;
 
-  db.run(`INSERT INTO timers (time, start_time, status) VALUES (?, ?, ?)`, [time, startTime, status], function(err) {
-    if (err) {
-      console.error('Erro ao inserir no banco de dados:', err.message); // Log de erro mais informativo
-      return res.status(500).json({ error: err.message });
+// Função para iniciar o cronômetro
+function startTimer(ws) {
+    if (!isRunning) {
+        startTime = Date.now() - elapsedTime;
+        interval = setInterval(() => updateTimer(ws), 1000);
+        isRunning = true;
     }
-    res.json({ id: this.lastID, time });
-  });
+}
+
+// Função para pausar o cronômetro
+function pauseTimer() {
+    if (isRunning) {
+        clearInterval(interval);
+        elapsedTime = Date.now() - startTime;
+        isRunning = false;
+    }
+}
+
+// Função para reiniciar o cronômetro
+function resetTimer(ws) {
+    if (isRunning) {
+        pauseTimer();
+    }
+    const timeSpent = calculateTimeSpent(elapsedTime);
+    elapsedTime = 0;
+    ws.send(JSON.stringify({ action: 'reset', timeSpent: "00:00:00" }));
+    saveLogToDB(timeSpent); // Salva o log ao reiniciar o cronômetro
+}
+
+// Atualiza o cronômetro e envia para os clientes WebSocket conectados
+function updateTimer(ws) {
+    elapsedTime = Date.now() - startTime;
+    const timeSpent = calculateTimeSpent(elapsedTime);
+    ws.send(JSON.stringify({ action: 'update', timeSpent }));
+}
+
+// Função para calcular o tempo em formato HH:MM:SS
+function calculateTimeSpent(time) {
+    const totalSeconds = Math.floor(time / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+// Função para salvar o log no banco de dados (dummy)
+function saveLogToDB(timeSpent) {
+    // Simulação de salvamento de log
+    const log = {
+        id: Math.floor(Math.random() * 10000),
+        timeSpent,
+        timestamp: new Date()
+    };
+    console.log('Log salvo:', log); // Exibir log no console (substituir pela lógica real de banco de dados)
+}
+
+// WebSocket connections
+wss.on('connection', (ws) => {
+    console.log('Novo cliente conectado.');
+
+    ws.on('message', (message) => {
+        const data = JSON.parse(message);
+        if (data.action === 'start') {
+            startTimer(ws);
+        } else if (data.action === 'pause') {
+            pauseTimer();
+        } else if (data.action === 'reset') {
+            resetTimer(ws);
+        }
+    });
+
+    ws.on('close', () => {
+        console.log('Cliente desconectado.');
+        pauseTimer(); // Pausa quando o cliente desconecta
+    });
 });
 
-// Rota para listar todos os cronômetros
-app.get('/timers', (req, res) => {
-  db.all(`SELECT * FROM timers`, [], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json(rows);
-  });
-});
-
-// Rota para excluir um cronômetro pelo ID
-app.delete('/timers/:id', (req, res) => {
-  const { id } = req.params;
-  db.run(`DELETE FROM timers WHERE id = ?`, [id], function(err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    res.json({ message: 'Cronômetro excluído', id });
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+server.listen(3000, () => {
+    console.log('Servidor rodando na porta 3000');
 });
